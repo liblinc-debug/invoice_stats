@@ -10,4 +10,4 @@ if [[ ! -x "$PYTHON" ]]; then
 fi
 
 cd "$ROOT_DIR"
-"$PYTHON" "$ROOT_DIR/发票统计工具/invoice_stats.py" "$@"
+"$PYTHON" "$ROOT_DIR/发票统计工具/gui.py"

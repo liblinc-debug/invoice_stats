@@ -8,3 +8,4 @@ tmp/pdfs/contacts/*.jpg
 材料费/*.pdf
 输出/*.xlsx
 tmp/pdfs/.DS_Store
+__pycache__/

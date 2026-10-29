@@ -9,4 +9,4 @@ python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install -r "$ROOT_DIR/发票统计工具/requirements.txt"
 
 echo
-echo "依赖安装完成。以后双击“startup.sh" 启动统计即可。"
+echo "依赖安装完成。以后双击“启动统计.command”即可。"

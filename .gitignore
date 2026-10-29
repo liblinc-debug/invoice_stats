@@ -7,3 +7,4 @@ tmp/pdfs/contacts/*.jpg
 差旅费/*.pdf
 材料费/*.pdf
 输出/*.xlsx
+tmp/pdfs/.DS_Store

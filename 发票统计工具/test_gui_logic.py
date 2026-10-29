@@ -52,18 +52,24 @@ class GuiLogicTest(unittest.TestCase):
         worker.run()
         self.assertEqual(cancelled, [True])
 
-    def test_directory_mapping_and_first_sheet_fallback(self):
+    def test_directory_mapping_and_selected_sheet_fallback(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "one.pdf").touch()
-            self.assertEqual(discover_invoice_groups(root, ["材料费"]), {"材料费": [root / "one.pdf"]})
+            self.assertEqual(
+                discover_invoice_groups(root, ["材料费", "差旅费"], "差旅费"),
+                {"差旅费": [root / "one.pdf"]},
+            )
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             child = root / "差旅费"
             child.mkdir()
             (child / "trip.pdf").touch()
-            self.assertEqual(discover_invoice_groups(root, ["材料费", "差旅费"]), {"差旅费": [child / "trip.pdf"]})
+            self.assertEqual(
+                discover_invoice_groups(root, ["材料费", "差旅费"], "材料费"),
+                {"差旅费": [child / "trip.pdf"]},
+            )
 
     def test_header_driven_write_and_sortable_types(self):
         workbook = Workbook()

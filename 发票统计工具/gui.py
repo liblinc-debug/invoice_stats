@@ -46,12 +46,18 @@ FIELD_ALIASES = {
 }
 
 
-def discover_invoice_groups(invoice_root: Path, sheet_names: list[str]) -> dict[str, list[Path]]:
-    """按直接子目录名映射工作表；无含 PDF 子目录时写入第一张表。"""
+def discover_invoice_groups(
+    invoice_root: Path,
+    sheet_names: list[str],
+    selected_sheet: str,
+) -> dict[str, list[Path]]:
+    """按子目录名映射工作表；无含 PDF 子目录时写入当前子表。"""
     if not invoice_root.is_dir():
         raise ValueError(f"发票目录不存在：{invoice_root}")
     if not sheet_names:
         raise ValueError("模板中没有工作表")
+    if selected_sheet not in sheet_names:
+        raise ValueError("未选中有效的模板子表")
 
     names = {name.strip().casefold(): name for name in sheet_names}
     child_groups: list[tuple[Path, list[Path]]] = []
@@ -70,7 +76,7 @@ def discover_invoice_groups(invoice_root: Path, sheet_names: list[str]) -> dict[
     if not child_groups:
         if not direct_pdfs:
             raise ValueError("所选目录中没有 PDF 发票")
-        return {sheet_names[0]: direct_pdfs}
+        return {selected_sheet: direct_pdfs}
 
     if direct_pdfs:
         raise ValueError("发票目录同时含有根目录 PDF 和子目录 PDF，请将根目录 PDF 移入对应子目录")
@@ -276,7 +282,8 @@ class InvoiceWindow(QMainWindow):
         if self.workbook is None or self.template_path is None or self.invoice_root is None:
             return
         try:
-            groups = discover_invoice_groups(self.invoice_root, self.workbook.sheetnames)
+            selected_sheet = self.tabs.tabText(self.tabs.currentIndex())
+            groups = discover_invoice_groups(self.invoice_root, self.workbook.sheetnames, selected_sheet)
             for sheet_name in groups:
                 find_invoice_columns(self.workbook[sheet_name])
         except Exception as exc:
@@ -359,6 +366,7 @@ class InvoiceWindow(QMainWindow):
         self.cancel_event = None
 
     def _render_workbook(self) -> None:
+        selected_sheet = self.tabs.tabText(self.tabs.currentIndex()) if self.tabs.count() else ""
         self.loading_tables = True
         self.tabs.clear()
         self.tables.clear()
@@ -403,6 +411,8 @@ class InvoiceWindow(QMainWindow):
                 )
             self.tabs.addTab(table, sheet.title)
             self.tables[table] = sheet.title
+        if selected_sheet in self.workbook.sheetnames:
+            self.tabs.setCurrentIndex(self.workbook.sheetnames.index(selected_sheet))
         self.loading_tables = False
 
     def _table_item_changed(self, item: QTableWidgetItem) -> None:

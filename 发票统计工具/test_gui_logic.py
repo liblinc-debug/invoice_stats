@@ -7,11 +7,46 @@ from pathlib import Path
 
 from openpyxl import Workbook
 
-from gui import ExtractionWorker, InvoiceWindow, discover_invoice_groups, find_invoice_columns, write_invoices_to_sheet
+from gui import (
+    ExtractionWorker,
+    InvoiceWindow,
+    apply_invoice_results,
+    discover_invoice_groups,
+    find_invoice_columns,
+    format_statistics_message,
+    write_invoices_to_sheet,
+)
 from invoice_stats import Invoice
 
 
 class GuiLogicTest(unittest.TestCase):
+    def test_single_sheet_statistics_preserves_other_sheets(self):
+        workbook = Workbook()
+        material = workbook.active
+        material.title = "材料费"
+        material["A1"] = "保留的材料费数据"
+        material["B2"] = "=1+1"
+        travel = workbook.create_sheet("差旅费")
+        travel.append(["序号", "日期", "发票号", "发票名称", "发票金额"])
+        invoice = Invoice("差旅费", Path("trip.pdf"), date(2026, 2, 3), "123", "住宿费", Decimal("88.50"))
+
+        updated = apply_invoice_results(workbook, {"差旅费": [invoice]})
+
+        self.assertEqual(updated["材料费"]["A1"].value, "保留的材料费数据")
+        self.assertEqual(updated["材料费"]["B2"].value, "=1+1")
+        self.assertEqual(updated["差旅费"]["C2"].value, "123")
+        self.assertEqual(updated["差旅费"]["E2"].value, 88.5)
+
+    def test_statistics_message_includes_decimal_total(self):
+        invoices = {
+            "材料费": [Invoice("材料费", Path("a.pdf"), date(2026, 1, 1), "1", "A", Decimal("45.70"))],
+            "差旅费": [Invoice("差旅费", Path("b.pdf"), date(2026, 1, 2), "2", "B", Decimal("0.30"))],
+        }
+        self.assertEqual(
+            format_statistics_message(invoices, 1),
+            "统计完成：共2张发票，总金额为：46.00，跳过1张重复发票",
+        )
+
     def test_progress_completion_can_close_dialog_during_set_value(self):
         class StatusBar:
             message = ""

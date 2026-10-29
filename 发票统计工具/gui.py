@@ -6,6 +6,7 @@ import sys
 import threading
 from datetime import date, datetime
 from decimal import Decimal
+from io import BytesIO
 from pathlib import Path
 
 import PyQt5
@@ -130,6 +131,13 @@ def deduplicate_invoices(invoices: list[Invoice]) -> tuple[list[Invoice], int]:
     return sorted(by_number.values(), key=lambda item: (item.invoice_date, item.number)), duplicate_count
 
 
+def format_statistics_message(result: dict[str, list[Invoice]], duplicates: int) -> str:
+    count = sum(len(invoices) for invoices in result.values())
+    total = sum((invoice.amount for invoices in result.values() for invoice in invoices), Decimal("0.00"))
+    suffix = f"，跳过{duplicates}张重复发票" if duplicates else ""
+    return f"统计完成：共{count}张发票，总金额为：{total:.2f}{suffix}"
+
+
 def write_invoices_to_sheet(sheet, invoices: list[Invoice], header_row: int, columns: dict[str, int]) -> None:
     first_data_row = header_row + 1
     template_row = first_data_row
@@ -160,6 +168,18 @@ def write_invoices_to_sheet(sheet, invoices: list[Invoice], header_row: int, col
         )
         if len(invoice.item_name) > 24:
             sheet.row_dimensions[row].height = max(sheet.row_dimensions[row].height or 20, 32)
+
+
+def apply_invoice_results(workbook, result: dict[str, list[Invoice]]):
+    snapshot = BytesIO()
+    workbook.save(snapshot)
+    snapshot.seek(0)
+    updated = load_workbook(snapshot, data_only=False)
+    layouts = {name: find_invoice_columns(updated[name]) for name in result}
+    for sheet_name, invoices in result.items():
+        header_row, columns = layouts[sheet_name]
+        write_invoices_to_sheet(updated[sheet_name], invoices, header_row, columns)
+    return updated
 
 
 class ExtractionWorker(QObject):
@@ -331,20 +351,14 @@ class InvoiceWindow(QMainWindow):
             self._show_error("发票解析未完成，工作区未修改：\n" + preview)
             return
         try:
-            updated = load_workbook(self.template_path, data_only=False)
-            layouts = {name: find_invoice_columns(updated[name]) for name in result}
-            for sheet_name, invoices in result.items():
-                header_row, columns = layouts[sheet_name]
-                write_invoices_to_sheet(updated[sheet_name], invoices, header_row, columns)
+            updated = apply_invoice_results(self.workbook, result)
         except Exception as exc:
             self._show_error(f"写入工作区失败：{exc}")
             return
 
         self.workbook = updated
         self._render_workbook()
-        count = sum(len(invoices) for invoices in result.values())
-        suffix = f"，跳过 {duplicates} 张重复发票" if duplicates else ""
-        self.statusBar().showMessage(f"统计完成：共 {count} 张发票{suffix}")
+        self.statusBar().showMessage(format_statistics_message(result, duplicates))
 
     def _on_cancelled(self) -> None:
         self._close_progress()

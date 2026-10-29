@@ -2,14 +2,25 @@
 
 本工具从当前目录下的 `材料费/`、`差旅费/` PDF 发票中提取开票日期、发票号码、项目名称和价税合计（小写），写入 `IDEA项目材料台账.xlsx` 对应子表。
 
-## 首次使用
+## Windows 首次使用
 
-1. 双击 `安装依赖.command (install.sh)`。
+1. 安装 Python 3.9 或更高版本。安装时勾选 `Add Python to PATH`。
+2. 双击 `Windows安装依赖.bat`。
+3. 保持以下目录和文件名不变：
+   - `IDEA项目材料台账.xlsx`
+   - `材料费/`
+   - `差旅费/`
+4. 双击 `Windows启动统计.bat`。
+5. 结果保存在 `输出/`，文件名包含运行时间。原台账不会被覆盖。
+
+## macOS 首次使用
+
+1. 双击 `安装依赖.command`（也可在终端运行 `install.sh`）。
 2. 保持以下目录和文件名不变：
    - `IDEA项目材料台账.xlsx`
    - `材料费/`
    - `差旅费/`
-3. 双击 `启动统计.command (startup.sh)`。
+3. 双击 `启动统计.command`（也可在终端运行 `startup.sh`）。
 4. 结果保存在 `输出/`，文件名包含运行时间。原台账不会被覆盖。
 
 ## 统计规则
@@ -23,19 +34,38 @@
 
 ## 命令行用法
 
+Windows：
+
+```bat
+Windows启动统计.bat
+Windows启动统计.bat --check-only
+Windows启动统计.bat --workbook "其他台账.xlsx" --output "输出\指定文件名.xlsx"
+```
+
+macOS：
+
 ```bash
 ./启动统计.command
 ./启动统计.command --check-only
 ./启动统计.command --workbook "其他台账.xlsx" --output "输出/指定文件名.xlsx"
 ```
 
-完整参数：
+查看完整参数：
+
+```bat
+.venv\Scripts\python.exe 发票统计工具\invoice_stats.py --help
+```
 
 ```bash
 .venv/bin/python 发票统计工具/invoice_stats.py --help
 ```
 
 ## 测试
+
+```bat
+.venv\Scripts\python.exe -m unittest 发票统计工具\test_invoice_stats.py
+Windows启动统计.bat --check-only
+```
 
 ```bash
 .venv/bin/python -m unittest 发票统计工具/test_invoice_stats.py

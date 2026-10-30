@@ -9,3 +9,6 @@ tmp/pdfs/contacts/*.jpg
 输出/*.xlsx
 tmp/pdfs/.DS_Store
 __pycache__/
+.build-venv/
+build/
+bin/

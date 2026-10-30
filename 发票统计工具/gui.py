@@ -221,7 +221,8 @@ class ExtractionWorker(QObject):
 class InvoiceWindow(QMainWindow):
     def __init__(self, root: Path | None = None):
         super().__init__()
-        self.root = (root or Path(__file__).resolve().parents[1]).resolve()
+        default_root = Path.home() if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
+        self.root = (root or default_root).resolve()
         self.template_path: Path | None = None
         self.invoice_root: Path | None = None
         self.workbook = None
@@ -285,6 +286,7 @@ class InvoiceWindow(QMainWindow):
             self._show_error(f"模板打开失败：{exc}")
             return
         self.template_path = Path(filename)
+        self.root = self.template_path.parent
         self.workbook = workbook
         self._render_workbook()
         self._update_actions()

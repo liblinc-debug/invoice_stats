@@ -51,6 +51,37 @@
 .venv/bin/python 发票统计工具/invoice_stats.py --check-only
 ```
 
+## 构建可执行程序
+
+构建需要 Python 3.9 或更高版本和网络连接。脚本会自动创建独立构建环境并安装 PyInstaller，不影响日常运行环境。macOS 的构建环境位于系统临时目录，用于避免 PyQt5 在中文路径下无法定位 Qt 插件；Windows 使用项目中的 `.build-venv`。
+
+macOS：
+
+```bash
+./build.sh
+```
+
+构建结果：
+
+```text
+bin/macos/发票整理工具.app
+```
+
+Windows：
+
+- 直接双击 `build.bat`；或
+- 在 Git Bash 中运行 `./build.sh`。
+
+构建结果：
+
+```text
+bin\windows\发票整理工具.exe
+```
+
+PyInstaller 不支持交叉编译：macOS 版本必须在 macOS 上构建，Windows 版本必须在 Windows 上构建。如需同时发布两个平台，在两台目标系统上各运行一次脚本，再汇总 `bin/macos/` 和 `bin/windows/` 即可。编译后的程序可在相同系统和 CPU 架构的电脑上直接运行，目标电脑无需安装 Python。
+
+由于本地构建程序没有购买代码签名证书，首次运行时系统可能弹出安全提示：macOS 可右键点击 `.app` 后选择“打开”；Windows 可在 SmartScreen 中选择“更多信息”后确认运行。
+
 ## 测试
 
 Windows：
@@ -72,6 +103,8 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest discover -s 发票统计�
 - `发票统计工具/invoice_stats.py`：PDF 解析后端及 v1.0 命令行入口。
 - `发票统计工具/test_*.py`：解析、目录映射和工作表写入测试。
 - `发票统计工具/requirements.txt`：固定版本的 Python 依赖。
+- `发票统计工具/requirements-build.txt`：可执行程序构建依赖。
+- `build.sh` / `build.bat`：macOS 和 Windows 一键构建脚本。
 - `发票统计工具/参考脚本/`：首次整理中使用的检查脚本，供排查保留。
 
 ## 已知限制

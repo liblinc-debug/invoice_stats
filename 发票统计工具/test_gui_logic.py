@@ -6,12 +6,15 @@ from decimal import Decimal
 from pathlib import Path
 
 from openpyxl import Workbook
+from pypdf import PdfReader, PdfWriter
 
 from gui import (
     ExtractionWorker,
     InvoiceWindow,
+    MergeWorker,
     apply_invoice_results,
     discover_invoice_groups,
+    find_pdf_files,
     find_invoice_columns,
     format_statistics_message,
     write_invoices_to_sheet,
@@ -20,6 +23,50 @@ from invoice_stats import Invoice
 
 
 class GuiLogicTest(unittest.TestCase):
+    def test_merge_worker_combines_recursive_pdfs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nested = root / "差旅费"
+            nested.mkdir()
+            for path, pages in (
+                (root / "a.pdf", 2),
+                (nested / "b.PDF", 1),
+                (root / "合并发票_20261030_1642.pdf", 1),
+            ):
+                writer = PdfWriter()
+                for _ in range(pages):
+                    writer.add_blank_page(width=72, height=72)
+                with path.open("wb") as stream:
+                    writer.write(stream)
+                writer.close()
+
+            pdf_paths = find_pdf_files(root)
+            self.assertEqual(pdf_paths, [root / "a.pdf", nested / "b.PDF"])
+            completed = []
+            errors = []
+            worker = MergeWorker(pdf_paths, threading.Event())
+            worker.finished.connect(lambda *values: completed.append(values))
+            worker.failed.connect(errors.append)
+            worker.run()
+
+            self.assertEqual(errors, [])
+            self.assertEqual(len(completed), 1)
+            merged_path, file_count, page_count = completed[0]
+            self.assertEqual((file_count, page_count), (2, 3))
+            merged = PdfReader(str(merged_path))
+            self.assertEqual(len(merged.pages), 3)
+            merged.close()
+            Path(merged_path).unlink()
+
+    def test_merge_worker_can_cancel_before_reading(self):
+        event = threading.Event()
+        event.set()
+        worker = MergeWorker([Path("not-read.pdf")], event)
+        cancelled = []
+        worker.cancelled.connect(lambda: cancelled.append(True))
+        worker.run()
+        self.assertEqual(cancelled, [True])
+
     def test_single_sheet_statistics_preserves_other_sheets(self):
         workbook = Workbook()
         material = workbook.active

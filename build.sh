@@ -50,6 +50,7 @@ echo "正在准备 $PLATFORM 构建环境…"
 
 DIST_DIR="$ROOT_DIR/bin/$PLATFORM"
 mkdir -p "$DIST_DIR" "$ROOT_DIR/build"
+export PYINSTALLER_CONFIG_DIR="$VENV_DIR/pyinstaller-config"
 
 echo "正在构建 $PLATFORM 可执行程序…"
 "$VENV_PYTHON" -m PyInstaller \

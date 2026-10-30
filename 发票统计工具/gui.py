@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
+import tempfile
 import threading
 from datetime import date, datetime
 from decimal import Decimal
@@ -20,6 +22,7 @@ os.environ.setdefault(
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Alignment
+from pypdf import PdfReader, PdfWriter
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
@@ -47,6 +50,10 @@ FIELD_ALIASES = {
 }
 
 
+def is_invoice_pdf(path: Path) -> bool:
+    return path.is_file() and path.suffix.casefold() == ".pdf" and not path.name.startswith("合并发票_")
+
+
 def discover_invoice_groups(
     invoice_root: Path,
     sheet_names: list[str],
@@ -64,14 +71,14 @@ def discover_invoice_groups(
     child_groups: list[tuple[Path, list[Path]]] = []
     for child in sorted((path for path in invoice_root.iterdir() if path.is_dir()), key=lambda path: path.name):
         pdfs = sorted(
-            (path for path in child.rglob("*") if path.is_file() and path.suffix.casefold() == ".pdf"),
+            (path for path in child.rglob("*") if is_invoice_pdf(path)),
             key=lambda path: str(path).casefold(),
         )
         if pdfs:
             child_groups.append((child, pdfs))
 
     direct_pdfs = sorted(
-        (path for path in invoice_root.iterdir() if path.is_file() and path.suffix.casefold() == ".pdf"),
+        (path for path in invoice_root.iterdir() if is_invoice_pdf(path)),
         key=lambda path: str(path).casefold(),
     )
     if not child_groups:
@@ -93,6 +100,18 @@ def discover_invoice_groups(
     if unknown:
         raise ValueError("以下发票子目录在模板中没有同名子表：" + "、".join(unknown))
     return groups
+
+
+def find_pdf_files(invoice_root: Path) -> list[Path]:
+    if not invoice_root.is_dir():
+        raise ValueError(f"发票目录不存在：{invoice_root}")
+    pdfs = sorted(
+        (path for path in invoice_root.rglob("*") if is_invoice_pdf(path)),
+        key=lambda path: str(path.relative_to(invoice_root)).casefold(),
+    )
+    if not pdfs:
+        raise ValueError("所选目录及其子目录中没有 PDF 发票")
+    return pdfs
 
 
 def find_invoice_columns(sheet) -> tuple[int, dict[str, int]]:
@@ -218,6 +237,67 @@ class ExtractionWorker(QObject):
         self.finished.emit(result, errors, duplicate_count)
 
 
+class MergeWorker(QObject):
+    progress = pyqtSignal(int, str)
+    finished = pyqtSignal(object, int, int)
+    failed = pyqtSignal(str)
+    cancelled = pyqtSignal()
+
+    def __init__(self, pdf_paths: list[Path], cancel_event: threading.Event):
+        super().__init__()
+        self.pdf_paths = pdf_paths
+        self.cancel_event = cancel_event
+
+    def run(self) -> None:
+        writer = PdfWriter()
+        readers: list[PdfReader] = []
+        temp_path: Path | None = None
+        expected_pages = 0
+        try:
+            for index, pdf_path in enumerate(self.pdf_paths, start=1):
+                if self.cancel_event.is_set():
+                    self.cancelled.emit()
+                    return
+                reader = PdfReader(str(pdf_path))
+                readers.append(reader)
+                for page in reader.pages:
+                    if self.cancel_event.is_set():
+                        self.cancelled.emit()
+                        return
+                    writer.add_page(page)
+                    expected_pages += 1
+                self.progress.emit(round(index * 90 / len(self.pdf_paths)), pdf_path.name)
+
+            if self.cancel_event.is_set():
+                self.cancelled.emit()
+                return
+            with tempfile.NamedTemporaryFile(prefix="merged-invoices-", suffix=".pdf", delete=False) as stream:
+                temp_path = Path(stream.name)
+            self.progress.emit(95, "正在写入合并文件")
+            with temp_path.open("wb") as stream:
+                writer.write(stream)
+            if self.cancel_event.is_set():
+                temp_path.unlink(missing_ok=True)
+                self.cancelled.emit()
+                return
+
+            checked = PdfReader(str(temp_path))
+            actual_pages = len(checked.pages)
+            checked.close()
+            if actual_pages != expected_pages:
+                raise ValueError(f"合并页数校验失败：应为 {expected_pages} 页，实际为 {actual_pages} 页")
+            self.progress.emit(100, "合并完成")
+            self.finished.emit(temp_path, len(self.pdf_paths), actual_pages)
+        except Exception as exc:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+            self.failed.emit(str(exc))
+        finally:
+            for reader in readers:
+                reader.close()
+            writer.close()
+
+
 class InvoiceWindow(QMainWindow):
     def __init__(self, root: Path | None = None):
         super().__init__()
@@ -229,11 +309,11 @@ class InvoiceWindow(QMainWindow):
         self.tables: dict[QTableWidget, str] = {}
         self.loading_tables = False
         self.thread: QThread | None = None
-        self.worker: ExtractionWorker | None = None
+        self.worker: QObject | None = None
         self.cancel_event: threading.Event | None = None
         self.progress_dialog: QProgressDialog | None = None
 
-        self.setWindowTitle("发票整理工具 v1.1")
+        self.setWindowTitle("发票整理工具 v1.1.2")
         self.resize(1180, 720)
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
@@ -248,12 +328,14 @@ class InvoiceWindow(QMainWindow):
         self.template_action = QAction("选择模板", self)
         self.invoice_action = QAction("选择发票", self)
         self.stats_action = QAction("统计", self)
+        self.merge_action = QAction("合并", self)
         self.export_action = QAction("导出", self)
         self.exit_action = QAction("退出", self)
         for action in (
             self.template_action,
             self.invoice_action,
             self.stats_action,
+            self.merge_action,
             self.export_action,
             self.exit_action,
         ):
@@ -261,6 +343,7 @@ class InvoiceWindow(QMainWindow):
         self.template_action.triggered.connect(self.choose_template)
         self.invoice_action.triggered.connect(self.choose_invoices)
         self.stats_action.triggered.connect(self.start_statistics)
+        self.merge_action.triggered.connect(self.start_merge)
         self.export_action.triggered.connect(self.export_workbook)
         self.exit_action.triggered.connect(self.close)
 
@@ -268,6 +351,7 @@ class InvoiceWindow(QMainWindow):
         self.template_action.setEnabled(not busy)
         self.invoice_action.setEnabled(not busy)
         self.stats_action.setEnabled(not busy and self.workbook is not None and self.invoice_root is not None)
+        self.merge_action.setEnabled(not busy and self.invoice_root is not None)
         self.export_action.setEnabled(not busy and self.workbook is not None)
         self.exit_action.setEnabled(not busy)
 
@@ -365,6 +449,86 @@ class InvoiceWindow(QMainWindow):
     def _on_cancelled(self) -> None:
         self._close_progress()
         self.statusBar().showMessage("已取消统计，工作区未修改")
+
+    def start_merge(self) -> None:
+        if self.invoice_root is None:
+            return
+        try:
+            pdf_paths = find_pdf_files(self.invoice_root)
+        except Exception as exc:
+            self._show_error(str(exc))
+            return
+
+        self.cancel_event = threading.Event()
+        self.progress_dialog = QProgressDialog("正在合并发票…", "取消", 0, 100, self)
+        self.progress_dialog.setWindowTitle(f"合并发票（共 {len(pdf_paths)} 个 PDF）")
+        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setAutoClose(False)
+        self.progress_dialog.setAutoReset(False)
+        self.progress_dialog.canceled.connect(self.cancel_event.set)
+        self.progress_dialog.show()
+        self._update_actions(busy=True)
+
+        self.thread = QThread(self)
+        self.worker = MergeWorker(pdf_paths, self.cancel_event)
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.progress.connect(self._on_merge_progress)
+        self.worker.finished.connect(self._on_merge_finished)
+        self.worker.failed.connect(self._on_merge_failed)
+        self.worker.cancelled.connect(self._on_merge_cancelled)
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.failed.connect(self.thread.quit)
+        self.worker.cancelled.connect(self.thread.quit)
+        self.thread.finished.connect(self._clear_worker)
+        self.thread.start()
+
+    def _on_merge_progress(self, value: int, filename: str) -> None:
+        dialog = self.progress_dialog
+        if dialog is None:
+            return
+        dialog.setLabelText(f"正在合并：{filename}")
+        self.statusBar().showMessage(f"合并进度 {value}%：{filename}")
+        dialog.setValue(value)
+
+    def _on_merge_finished(self, temp_path: Path, file_count: int, page_count: int) -> None:
+        self._close_progress()
+        directory = QFileDialog.getExistingDirectory(self, "选择合并发票保存目录", str(self.root))
+        if not directory:
+            temp_path.unlink(missing_ok=True)
+            self.statusBar().showMessage("已取消保存，未生成合并文件")
+            return
+
+        output_path = Path(directory) / f"合并发票_{datetime.now():%Y%m%d_%H%M}.pdf"
+        if output_path.exists():
+            answer = QMessageBox.question(
+                self,
+                "文件已存在",
+                f"{output_path.name} 已存在，是否覆盖？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                temp_path.unlink(missing_ok=True)
+                self.statusBar().showMessage("已取消保存，原文件未改动")
+                return
+        try:
+            output_path.unlink(missing_ok=True)
+            shutil.move(str(temp_path), str(output_path))
+        except Exception as exc:
+            temp_path.unlink(missing_ok=True)
+            self._show_error(f"保存合并发票失败：{exc}")
+            return
+        self.statusBar().showMessage(f"合并完成：{file_count} 个 PDF，共 {page_count} 页，已保存到 {output_path}")
+        QMessageBox.information(self, "合并完成", f"已保存到：\n{output_path}")
+
+    def _on_merge_failed(self, message: str) -> None:
+        self._close_progress()
+        self._show_error(f"合并失败：{message}")
+
+    def _on_merge_cancelled(self) -> None:
+        self._close_progress()
+        self.statusBar().showMessage("已取消合并，未生成文件")
 
     def _close_progress(self) -> None:
         if self.progress_dialog is not None:

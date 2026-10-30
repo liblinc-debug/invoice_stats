@@ -24,6 +24,7 @@ if errorlevel 1 goto :build_failed
 if errorlevel 1 goto :build_failed
 
 echo 正在构建 Windows 可执行程序...
+set "PYINSTALLER_CONFIG_DIR=%CD%\.build-venv\pyinstaller-config"
 ".build-venv\Scripts\python.exe" -m PyInstaller ^
     --noconfirm ^
     --clean ^

@@ -49,8 +49,21 @@ echo "正在准备 $PLATFORM 构建环境…"
 "$VENV_PYTHON" -m pip install -r "$ROOT_DIR/发票统计工具/requirements-build.txt"
 
 DIST_DIR="$ROOT_DIR/bin/$PLATFORM"
-mkdir -p "$DIST_DIR" "$ROOT_DIR/build"
+ICON_DIR="$ROOT_DIR/build/icons"
+mkdir -p "$DIST_DIR" "$ROOT_DIR/build" "$ICON_DIR"
 export PYINSTALLER_CONFIG_DIR="$VENV_DIR/pyinstaller-config"
+
+if [[ "$PLATFORM" == "macos" ]]; then
+  ICON_PATH="$ICON_DIR/invoiceIcon.icns"
+  DATA_SEPARATOR=":"
+else
+  ICON_PATH="$ICON_DIR/invoiceIcon.ico"
+  DATA_SEPARATOR=";"
+fi
+"$VENV_PYTHON" "$ROOT_DIR/发票统计工具/build_icon.py" \
+  "$PLATFORM" \
+  "$ROOT_DIR/img/invoiceIcon.svg" \
+  "$ICON_PATH"
 
 echo "正在构建 $PLATFORM 可执行程序…"
 "$VENV_PYTHON" -m PyInstaller \
@@ -58,6 +71,8 @@ echo "正在构建 $PLATFORM 可执行程序…"
   --clean \
   "${BUNDLE_MODE[@]}" \
   --windowed \
+  --icon "$ICON_PATH" \
+  --add-data "$ROOT_DIR/img/invoiceIcon.svg${DATA_SEPARATOR}img" \
   --name "发票整理工具" \
   --distpath "$DIST_DIR" \
   --workpath "$ROOT_DIR/build/pyinstaller-$PLATFORM" \

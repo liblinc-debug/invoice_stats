@@ -25,11 +25,16 @@ if errorlevel 1 goto :build_failed
 
 echo 正在构建 Windows 可执行程序...
 set "PYINSTALLER_CONFIG_DIR=%CD%\.build-venv\pyinstaller-config"
+if not exist "build\icons" mkdir "build\icons"
+".build-venv\Scripts\python.exe" "发票统计工具\build_icon.py" windows "img\invoiceIcon.svg" "build\icons\invoiceIcon.ico"
+if errorlevel 1 goto :build_failed
 ".build-venv\Scripts\python.exe" -m PyInstaller ^
     --noconfirm ^
     --clean ^
     --onefile ^
     --windowed ^
+    --icon "build\icons\invoiceIcon.ico" ^
+    --add-data "img\invoiceIcon.svg;img" ^
     --name "发票整理工具" ^
     --distpath "bin\windows" ^
     --workpath "build\pyinstaller-windows" ^

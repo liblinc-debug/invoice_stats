@@ -89,6 +89,8 @@
 
 构建需要 Python 3.9 或更高版本和网络连接。脚本会自动创建独立构建环境并安装 PyInstaller，不影响日常运行环境。macOS 的构建环境位于系统临时目录，用于避免 PyQt5 在中文路径下无法定位 Qt 插件；Windows 使用项目中的 `.build-venv`。
 
+构建脚本会自动将 `img/invoiceIcon.svg` 转换为目标系统图标：macOS 使用 `.icns`，Windows 使用 `.ico`。运行窗口、Dock、任务栏和编译后的程序文件使用同一发票图标。
+
 macOS：
 
 ```bash
@@ -136,6 +138,7 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest discover -s 发票统计�
 - `发票统计工具/gui.py`：PyQt5 主界面和通用目录/表头映射。
 - `发票统计工具/pdf_printing.py`：PDF 工作区预览、打印设置和跨平台打印。
 - `发票统计工具/workbook_printing.py`：将当前 Excel 工作簿生成临时打印预览。
+- `发票统计工具/build_icon.py`：从 SVG 自动生成 macOS 和 Windows 构建图标。
 - `发票统计工具/invoice_stats.py`：PDF 解析后端及 v1.0 命令行入口。
 - `发票统计工具/test_*.py`：解析、目录映射和工作表写入测试。
 - `发票统计工具/requirements.txt`：固定版本的 Python 依赖。

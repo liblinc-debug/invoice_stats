@@ -23,8 +23,9 @@ from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Alignment
 from pypdf import PdfReader, PdfWriter
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QIcon
 from PyQt5.QtPrintSupport import QPrinter, QPrinterInfo
+from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -54,6 +55,12 @@ FIELD_ALIASES = {
 
 PDF_PREVIEW_TAB = "合并发票预览"
 HELP_TAB = "帮助"
+
+
+def application_icon() -> QIcon:
+    base_path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+    icon_path = base_path / "img" / "invoiceIcon.svg"
+    return QIcon(str(icon_path)) if QSvgRenderer(str(icon_path)).isValid() else QIcon()
 
 
 def is_invoice_pdf(path: Path) -> bool:
@@ -338,6 +345,7 @@ class InvoiceWindow(QMainWindow):
         self.busy = False
 
         self.setWindowTitle("发票整理工具 v1.1.2")
+        self.setWindowIcon(application_icon())
         self.resize(1180, 720)
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
@@ -935,6 +943,7 @@ class InvoiceWindow(QMainWindow):
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("发票整理工具")
+    app.setWindowIcon(application_icon())
     window = InvoiceWindow()
     window.show()
     return app.exec_()

@@ -18,7 +18,7 @@ from pypdf import PdfReader, PdfWriter
 from PyQt5.QtPrintSupport import QPrinter
 from PyQt5.QtWidgets import QApplication, QToolBar
 
-from gui import HELP_TAB, InvoiceWindow, PDF_PREVIEW_TAB
+from gui import HELP_TAB, InvoiceWindow, PDF_PREVIEW_TAB, application_icon
 from pdf_printing import PdfPreviewWidget, PrintSettings, PrintSettingsDialog, ordered_slots, print_pdf_data
 from workbook_printing import workbook_to_pdf_data
 
@@ -49,6 +49,8 @@ class PdfPrintingTest(unittest.TestCase):
 
     def test_main_window_shows_preview_and_print_button_before_exit(self):
         window = InvoiceWindow(Path(tempfile.gettempdir()))
+        self.assertFalse(application_icon().isNull())
+        self.assertFalse(window.windowIcon().isNull())
         window.merged_pdf_data = sample_pdf()
         window._show_pdf_preview()
         actions = [action.text() for action in window.findChild(QToolBar).actions()]

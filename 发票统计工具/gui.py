@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import sys
 import tempfile
 import threading
@@ -25,6 +24,7 @@ from openpyxl.styles import Alignment
 from pypdf import PdfReader, PdfWriter
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor
+from PyQt5.QtPrintSupport import QPrinter, QPrinterInfo
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -35,10 +35,13 @@ from PyQt5.QtWidgets import (
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTextBrowser,
     QToolBar,
 )
 
 from invoice_stats import Invoice, copy_row_format, parse_invoice, set_text_identifier
+from pdf_printing import PdfPreviewWidget, PrintSettingsDialog, print_pdf_data
+from workbook_printing import workbook_to_pdf_data
 
 
 FIELD_ALIASES = {
@@ -48,6 +51,9 @@ FIELD_ALIASES = {
     "item": ("物料品名", "发票名称", "项目名称", "物品名称"),
     "amount": ("金额", "发票金额"),
 }
+
+PDF_PREVIEW_TAB = "合并发票预览"
+HELP_TAB = "帮助"
 
 
 def is_invoice_pdf(path: Path) -> bool:
@@ -312,12 +318,20 @@ class InvoiceWindow(QMainWindow):
         self.worker: QObject | None = None
         self.cancel_event: threading.Event | None = None
         self.progress_dialog: QProgressDialog | None = None
+        self.merged_pdf_data: bytes | None = None
+        self.closed_sheet_names: set[str] = set()
+        self.pdf_preview_open = False
+        self.help_open = False
+        self.busy = False
 
         self.setWindowTitle("发票整理工具 v1.1.2")
         self.resize(1180, 720)
         self.tabs = QTabWidget()
+        self.tabs.setTabsClosable(True)
         self.setCentralWidget(self.tabs)
         self._build_toolbar()
+        self.tabs.tabCloseRequested.connect(self._close_workspace_tab)
+        self.tabs.currentChanged.connect(lambda _index: self._update_actions())
         self.statusBar().showMessage("请先选择 Excel 模板和发票目录")
         self._update_actions()
 
@@ -330,6 +344,8 @@ class InvoiceWindow(QMainWindow):
         self.stats_action = QAction("统计", self)
         self.merge_action = QAction("合并", self)
         self.export_action = QAction("导出", self)
+        self.print_action = QAction("打印", self)
+        self.help_action = QAction("帮助", self)
         self.exit_action = QAction("退出", self)
         for action in (
             self.template_action,
@@ -337,6 +353,8 @@ class InvoiceWindow(QMainWindow):
             self.stats_action,
             self.merge_action,
             self.export_action,
+            self.print_action,
+            self.help_action,
             self.exit_action,
         ):
             toolbar.addAction(action)
@@ -344,16 +362,33 @@ class InvoiceWindow(QMainWindow):
         self.invoice_action.triggered.connect(self.choose_invoices)
         self.stats_action.triggered.connect(self.start_statistics)
         self.merge_action.triggered.connect(self.start_merge)
-        self.export_action.triggered.connect(self.export_workbook)
+        self.export_action.triggered.connect(self.export_current)
+        self.print_action.triggered.connect(self.start_print)
+        self.help_action.triggered.connect(self.show_help)
         self.exit_action.triggered.connect(self.close)
 
-    def _update_actions(self, busy: bool = False) -> None:
-        self.template_action.setEnabled(not busy)
-        self.invoice_action.setEnabled(not busy)
-        self.stats_action.setEnabled(not busy and self.workbook is not None and self.invoice_root is not None)
-        self.merge_action.setEnabled(not busy and self.invoice_root is not None)
-        self.export_action.setEnabled(not busy and self.workbook is not None)
-        self.exit_action.setEnabled(not busy)
+    def _update_actions(self, busy: bool | None = None) -> None:
+        if busy is not None:
+            self.busy = busy
+        workspace_kind = self._current_workspace_kind()
+        self.template_action.setEnabled(not self.busy)
+        self.invoice_action.setEnabled(not self.busy)
+        self.stats_action.setEnabled(
+            not self.busy
+            and workspace_kind == "workbook"
+            and self.workbook is not None
+            and self.invoice_root is not None
+        )
+        self.merge_action.setEnabled(not self.busy and self.invoice_root is not None)
+        self.export_action.setEnabled(not self.busy and workspace_kind in {"workbook", "pdf"})
+        self.print_action.setEnabled(not self.busy and workspace_kind in {"workbook", "pdf"})
+        self.help_action.setEnabled(not self.busy)
+        self.exit_action.setEnabled(not self.busy)
+        self.tabs.setEnabled(not self.busy)
+
+    def _current_workspace_kind(self) -> str | None:
+        widget = self.tabs.currentWidget()
+        return widget.property("workspaceKind") if widget is not None else None
 
     def choose_template(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
@@ -372,6 +407,7 @@ class InvoiceWindow(QMainWindow):
         self.template_path = Path(filename)
         self.root = self.template_path.parent
         self.workbook = workbook
+        self.closed_sheet_names.clear()
         self._render_workbook()
         self._update_actions()
         self.statusBar().showMessage(f"已导入模板：{self.template_path.name}")
@@ -388,7 +424,9 @@ class InvoiceWindow(QMainWindow):
         if self.workbook is None or self.template_path is None or self.invoice_root is None:
             return
         try:
-            selected_sheet = self.tabs.tabText(self.tabs.currentIndex())
+            selected_sheet = self.tables.get(self.tabs.currentWidget())
+            if selected_sheet is None:
+                raise ValueError("请先选择一个 Excel 子表")
             groups = discover_invoice_groups(self.invoice_root, self.workbook.sheetnames, selected_sheet)
             for sheet_name in groups:
                 find_invoice_columns(self.workbook[sheet_name])
@@ -493,34 +531,78 @@ class InvoiceWindow(QMainWindow):
 
     def _on_merge_finished(self, temp_path: Path, file_count: int, page_count: int) -> None:
         self._close_progress()
-        directory = QFileDialog.getExistingDirectory(self, "选择合并发票保存目录", str(self.root))
-        if not directory:
-            temp_path.unlink(missing_ok=True)
-            self.statusBar().showMessage("已取消保存，未生成合并文件")
-            return
-
-        output_path = Path(directory) / f"合并发票_{datetime.now():%Y%m%d_%H%M}.pdf"
-        if output_path.exists():
-            answer = QMessageBox.question(
-                self,
-                "文件已存在",
-                f"{output_path.name} 已存在，是否覆盖？",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if answer != QMessageBox.Yes:
-                temp_path.unlink(missing_ok=True)
-                self.statusBar().showMessage("已取消保存，原文件未改动")
-                return
         try:
-            output_path.unlink(missing_ok=True)
-            shutil.move(str(temp_path), str(output_path))
+            self.merged_pdf_data = temp_path.read_bytes()
+            self._show_pdf_preview()
         except Exception as exc:
             temp_path.unlink(missing_ok=True)
-            self._show_error(f"保存合并发票失败：{exc}")
+            self.merged_pdf_data = None
+            self._update_actions()
+            self._show_error(f"显示合并发票失败：{exc}")
             return
-        self.statusBar().showMessage(f"合并完成：{file_count} 个 PDF，共 {page_count} 页，已保存到 {output_path}")
-        QMessageBox.information(self, "合并完成", f"已保存到：\n{output_path}")
+        finally:
+            temp_path.unlink(missing_ok=True)
+        self.statusBar().showMessage(
+            f"合并完成：{file_count} 个 PDF，共 {page_count} 页；请点击“导出”保存合并文件"
+        )
+
+    def _show_pdf_preview(self) -> None:
+        if self.merged_pdf_data is None:
+            return
+        for index in range(self.tabs.count()):
+            if self.tabs.tabText(index) == PDF_PREVIEW_TAB:
+                old_widget = self.tabs.widget(index)
+                self.tabs.removeTab(index)
+                old_widget.deleteLater()
+                break
+        preview = PdfPreviewWidget(self.merged_pdf_data)
+        preview.setProperty("workspaceKind", "pdf")
+        self.tabs.addTab(preview, PDF_PREVIEW_TAB)
+        self.tabs.setCurrentWidget(preview)
+        self.pdf_preview_open = True
+        self._update_actions()
+
+    def start_print(self) -> None:
+        workspace_kind = self._current_workspace_kind()
+        if workspace_kind == "pdf":
+            pdf_data = self.merged_pdf_data
+            document_name = "合并发票"
+        elif workspace_kind == "workbook" and self.workbook is not None:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            self.statusBar().showMessage("正在生成 Excel 打印预览…")
+            try:
+                pdf_data = workbook_to_pdf_data(self.workbook)
+            except Exception as exc:
+                self._show_error(f"生成 Excel 打印预览失败：{exc}")
+                return
+            finally:
+                QApplication.restoreOverrideCursor()
+            document_name = self.template_path.name if self.template_path else "Excel 工作簿"
+        else:
+            return
+        if pdf_data is None:
+            return
+        dialog = PrintSettingsDialog(pdf_data, self)
+        if dialog.exec_() != dialog.Accepted:
+            return
+        settings = dialog.settings()
+        printer_info = QPrinterInfo.printerInfo(settings.printer_name)
+        printer = QPrinter(printer_info, QPrinter.HighResolution)
+        resolutions = [value for value in printer_info.supportedResolutions() if value <= 300]
+        if resolutions:
+            printer.setResolution(max(resolutions))
+        self._update_actions(busy=True)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            sheet_count = print_pdf_data(pdf_data, settings, printer)
+        except Exception as exc:
+            self._show_error(f"打印失败：{exc}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+            self._update_actions()
+        self.statusBar().showMessage(f"已将{document_name}提交到 {settings.printer_name}，共 {sheet_count} 张纸")
+        QMessageBox.information(self, "已提交打印", f"打印任务已发送到：\n{settings.printer_name}")
 
     def _on_merge_failed(self, message: str) -> None:
         self._close_progress()
@@ -534,7 +616,7 @@ class InvoiceWindow(QMainWindow):
         if self.progress_dialog is not None:
             self.progress_dialog.close()
             self.progress_dialog = None
-        self._update_actions()
+        self._update_actions(busy=False)
 
     def _clear_worker(self) -> None:
         if self.worker is not None:
@@ -548,10 +630,16 @@ class InvoiceWindow(QMainWindow):
     def _render_workbook(self) -> None:
         selected_sheet = self.tabs.tabText(self.tabs.currentIndex()) if self.tabs.count() else ""
         self.loading_tables = True
-        self.tabs.clear()
+        while self.tabs.count():
+            widget = self.tabs.widget(0)
+            self.tabs.removeTab(0)
+            widget.deleteLater()
         self.tables.clear()
         for sheet in self.workbook.worksheets:
+            if sheet.title in self.closed_sheet_names:
+                continue
             table = QTableWidget(max(sheet.max_row, 1), max(sheet.max_column, 1))
+            table.setProperty("workspaceKind", "workbook")
             table.setAlternatingRowColors(True)
             table.setHorizontalHeaderLabels([self._column_name(index) for index in range(1, table.columnCount() + 1)])
             table.setVerticalHeaderLabels([str(index) for index in range(1, table.rowCount() + 1)])
@@ -591,9 +679,23 @@ class InvoiceWindow(QMainWindow):
                 )
             self.tabs.addTab(table, sheet.title)
             self.tables[table] = sheet.title
-        if selected_sheet in self.workbook.sheetnames:
-            self.tabs.setCurrentIndex(self.workbook.sheetnames.index(selected_sheet))
+        for index in range(self.tabs.count()):
+            if self.tabs.tabText(index) == selected_sheet:
+                self.tabs.setCurrentIndex(index)
+                break
         self.loading_tables = False
+        if self.pdf_preview_open and self.merged_pdf_data is not None:
+            preview = PdfPreviewWidget(self.merged_pdf_data)
+            preview.setProperty("workspaceKind", "pdf")
+            self.tabs.addTab(preview, PDF_PREVIEW_TAB)
+            if selected_sheet == PDF_PREVIEW_TAB:
+                self.tabs.setCurrentWidget(preview)
+        if self.help_open:
+            help_widget = self._create_help_widget()
+            self.tabs.addTab(help_widget, HELP_TAB)
+            if selected_sheet == HELP_TAB:
+                self.tabs.setCurrentWidget(help_widget)
+        self._update_actions()
 
     def _table_item_changed(self, item: QTableWidgetItem) -> None:
         if self.loading_tables or self.workbook is None:
@@ -612,6 +714,54 @@ class InvoiceWindow(QMainWindow):
             self.loading_tables = True
             item.setText(self._display_value(cell.value))
             self.loading_tables = False
+
+    def export_current(self) -> None:
+        workspace_kind = self._current_workspace_kind()
+        if workspace_kind == "pdf":
+            self.export_pdf()
+        elif workspace_kind == "workbook":
+            self.export_workbook()
+
+    def export_pdf(self) -> None:
+        if self.merged_pdf_data is None:
+            return
+        output_dir = self.root / "输出"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        default_name = f"合并发票_{datetime.now():%Y%m%d_%H%M}.pdf"
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出合并发票",
+            str(output_dir / default_name),
+            "PDF 文件 (*.pdf)",
+        )
+        if not filename:
+            return
+        output_path = Path(filename)
+        if output_path.suffix.lower() != ".pdf":
+            output_path = output_path.with_suffix(".pdf")
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                prefix="invoice-export-",
+                suffix=".pdf",
+                dir=output_path.parent,
+                delete=False,
+            ) as stream:
+                stream.write(self.merged_pdf_data)
+                temp_path = Path(stream.name)
+            checked = PdfReader(str(temp_path))
+            page_count = len(checked.pages)
+            checked.close()
+            if page_count == 0:
+                raise ValueError("合并发票没有页面")
+            os.replace(temp_path, output_path)
+        except Exception as exc:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+            self._show_error(f"导出 PDF 失败：{exc}")
+            return
+        self.statusBar().showMessage(f"已导出：{output_path}")
+        QMessageBox.information(self, "导出完成", f"已保存到：\n{output_path}")
 
     def export_workbook(self) -> None:
         if self.workbook is None or self.template_path is None:
@@ -641,6 +791,75 @@ class InvoiceWindow(QMainWindow):
             return
         self.statusBar().showMessage(f"已导出：{output_path}")
         QMessageBox.information(self, "导出完成", f"已保存到：\n{output_path}")
+
+    def _close_workspace_tab(self, index: int) -> None:
+        widget = self.tabs.widget(index)
+        if widget is None:
+            return
+        workspace_kind = widget.property("workspaceKind")
+        if workspace_kind == "workbook":
+            sheet_name = self.tables.pop(widget, None)
+            if sheet_name:
+                self.closed_sheet_names.add(sheet_name)
+        elif workspace_kind == "pdf":
+            self.pdf_preview_open = False
+            self.merged_pdf_data = None
+        elif workspace_kind == "help":
+            self.help_open = False
+        self.tabs.removeTab(index)
+        widget.deleteLater()
+        self._update_actions()
+
+    def show_help(self) -> None:
+        for index in range(self.tabs.count()):
+            if self.tabs.tabText(index) == HELP_TAB:
+                self.tabs.setCurrentIndex(index)
+                return
+        help_widget = self._create_help_widget()
+        self.tabs.addTab(help_widget, HELP_TAB)
+        self.tabs.setCurrentWidget(help_widget)
+        self.help_open = True
+        self._update_actions()
+
+    @staticmethod
+    def _create_help_widget() -> QTextBrowser:
+        help_widget = QTextBrowser()
+        help_widget.setProperty("workspaceKind", "help")
+        help_widget.setOpenExternalLinks(True)
+        help_widget.setHtml(
+            """
+            <style>
+              body { font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; margin: 28px; line-height: 1.65; }
+              h1 { color: #1f4e78; }
+              h2 { margin-top: 24px; color: #333; }
+              code { background: #f2f2f2; padding: 2px 5px; }
+            </style>
+            <h1>发票整理工具 v1.1.2</h1>
+            <p>本工具用于从电子发票 PDF 中提取信息、写入 Excel 台账、合并发票、预览、导出和打印。</p>
+
+            <h2>基本操作</h2>
+            <ol>
+              <li>点击“选择模板”，导入 <code>IDEA项目材料台账.xlsx</code>。</li>
+              <li>点击“选择发票”，选择包含发票 PDF 的目录。</li>
+              <li>在工作区选择目标 Excel 子表，点击“统计”提取发票日期、号码、项目名称和含税金额。</li>
+              <li>点击“合并”，将所选目录及子目录中的发票合并，并在“合并发票预览”标签中查看。</li>
+            </ol>
+
+            <h2>导出与打印</h2>
+            <ul>
+              <li>当前显示 Excel 子表时，“导出”保存整个 Excel 工作簿，“打印”打印工作簿。</li>
+              <li>当前显示“合并发票预览”时，“导出”保存合并 PDF，“打印”打印合并发票。</li>
+              <li>打印窗口支持页面大小和一张多页两种方式。确认后任务会直接发送到所选系统打印机。</li>
+              <li>标签右侧的“×”可关闭对应工作区内容。关闭合并发票预览后，需要重新合并才能再次导出或打印。</li>
+            </ul>
+
+            <h2>版本与授权</h2>
+            <p><b>版本：</b>v1.1.2。</p>
+            <p><b>非商业使用：</b>个人学习、研究和其他非商业用途可免费使用。</p>
+            <p><b>商业使用：</b>用于企业经营、收费服务、对外交付或其他商业用途时，需要付费获得商业授权。具体授权请联系软件提供方。</p>
+            """
+        )
+        return help_widget
 
     def closeEvent(self, event) -> None:
         if self.thread is not None and self.thread.isRunning():

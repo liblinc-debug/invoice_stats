@@ -4,6 +4,7 @@ import unittest
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import Workbook
 from pypdf import PdfReader, PdfWriter
@@ -28,14 +29,14 @@ class GuiLogicTest(unittest.TestCase):
             root = Path(directory)
             nested = root / "差旅费"
             nested.mkdir()
-            for path, pages in (
-                (root / "a.pdf", 2),
-                (nested / "b.PDF", 1),
-                (root / "合并发票_20261030_1642.pdf", 1),
+            for path, pages, width in (
+                (root / "a.pdf", 2, 72),
+                (nested / "b.PDF", 1, 73),
+                (root / "合并发票_20261030_1642.pdf", 1, 74),
             ):
                 writer = PdfWriter()
                 for _ in range(pages):
-                    writer.add_blank_page(width=72, height=72)
+                    writer.add_blank_page(width=width, height=72)
                 with path.open("wb") as stream:
                     writer.write(stream)
                 writer.close()
@@ -47,7 +48,12 @@ class GuiLogicTest(unittest.TestCase):
             worker = MergeWorker(pdf_paths, threading.Event())
             worker.finished.connect(lambda *values: completed.append(values))
             worker.failed.connect(errors.append)
-            worker.run()
+            dates = {
+                "a.pdf": "开票日期：2026年10月30日",
+                "b.PDF": "开票日期：2025年01月02日",
+            }
+            with patch("gui.extract_pdf_text", side_effect=lambda path: dates[path.name]):
+                worker.run()
 
             self.assertEqual(errors, [])
             self.assertEqual(len(completed), 1)
@@ -55,6 +61,7 @@ class GuiLogicTest(unittest.TestCase):
             self.assertEqual((file_count, page_count), (2, 3))
             merged = PdfReader(str(merged_path))
             self.assertEqual(len(merged.pages), 3)
+            self.assertEqual([float(page.mediabox.width) for page in merged.pages], [73, 72, 72])
             merged.close()
             Path(merged_path).unlink()
 

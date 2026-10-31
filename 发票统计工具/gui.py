@@ -39,7 +39,7 @@ from PyQt5.QtWidgets import (
     QToolBar,
 )
 
-from invoice_stats import Invoice, copy_row_format, parse_invoice, set_text_identifier
+from invoice_stats import Invoice, copy_row_format, extract_pdf_text, parse_date, parse_invoice, set_text_identifier
 from pdf_printing import PdfPreviewWidget, PrintSettingsDialog, print_pdf_data
 from workbook_printing import workbook_to_pdf_data
 
@@ -260,7 +260,20 @@ class MergeWorker(QObject):
         temp_path: Path | None = None
         expected_pages = 0
         try:
+            dated_paths: list[tuple[date, Path]] = []
             for index, pdf_path in enumerate(self.pdf_paths, start=1):
+                if self.cancel_event.is_set():
+                    self.cancelled.emit()
+                    return
+                try:
+                    invoice_date = parse_date(extract_pdf_text(pdf_path))
+                except Exception as exc:
+                    raise ValueError(f"{pdf_path.name}：无法读取开票日期（{exc}）") from exc
+                dated_paths.append((invoice_date, pdf_path))
+                self.progress.emit(round(index * 25 / len(self.pdf_paths)), f"读取日期：{pdf_path.name}")
+            dated_paths.sort(key=lambda item: (item[0], str(item[1]).casefold()))
+
+            for index, (_invoice_date, pdf_path) in enumerate(dated_paths, start=1):
                 if self.cancel_event.is_set():
                     self.cancelled.emit()
                     return
@@ -272,7 +285,7 @@ class MergeWorker(QObject):
                         return
                     writer.add_page(page)
                     expected_pages += 1
-                self.progress.emit(round(index * 90 / len(self.pdf_paths)), pdf_path.name)
+                self.progress.emit(25 + round(index * 65 / len(self.pdf_paths)), pdf_path.name)
 
             if self.cancel_event.is_set():
                 self.cancelled.emit()
@@ -842,7 +855,7 @@ class InvoiceWindow(QMainWindow):
               <li>点击“选择模板”，导入 <code>IDEA项目材料台账.xlsx</code>。</li>
               <li>点击“选择发票”，选择包含发票 PDF 的目录。</li>
               <li>在工作区选择目标 Excel 子表，点击“统计”提取发票日期、号码、项目名称和含税金额。</li>
-              <li>点击“合并”，将所选目录及子目录中的发票合并，并在“合并发票预览”标签中查看。</li>
+              <li>点击“合并”，将所选目录及子目录中的发票按开票日期从早到晚合并，并在“合并发票预览”标签中查看。</li>
             </ol>
 
             <h2>导出与打印</h2>

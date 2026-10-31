@@ -107,7 +107,10 @@ class PdfPrintingTest(unittest.TestCase):
 
         window.show_help()
         self.assertEqual(window.tabs.tabText(window.tabs.currentIndex()), HELP_TAB)
-        self.assertIn("商业用途时，需要付费", window.tabs.currentWidget().toPlainText())
+        help_text = window.tabs.currentWidget().toPlainText()
+        self.assertIn("MIT License", help_text)
+        self.assertIn("商业用途均可免费使用", help_text)
+        self.assertNotIn("付费商业授权", help_text)
         self.assertFalse(window.export_action.isEnabled())
         help_index = window.tabs.currentIndex()
         window._close_workspace_tab(help_index)

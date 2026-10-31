@@ -89,6 +89,7 @@ if [[ ! -e "$OUTPUT" ]]; then
   echo "构建失败：未找到 $OUTPUT" >&2
   exit 1
 fi
+cp "$ROOT_DIR/LICENSE" "$DIST_DIR/LICENSE"
 
 echo
 echo "构建完成：$OUTPUT"

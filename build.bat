@@ -2,6 +2,7 @@
 setlocal
 chcp 65001 >nul
 cd /d "%~dp0"
+set "ROOT_DIR=%~dp0"
 
 where py >nul 2>nul
 if not errorlevel 1 (
@@ -24,27 +25,30 @@ if errorlevel 1 goto :build_failed
 if errorlevel 1 goto :build_failed
 
 echo 正在构建 Windows 可执行程序...
-set "PYINSTALLER_CONFIG_DIR=%CD%\.build-venv\pyinstaller-config"
-if not exist "build\icons" mkdir "build\icons"
-".build-venv\Scripts\python.exe" "发票统计工具\build_icon.py" windows "img\invoiceIcon.svg" "build\icons\invoiceIcon.ico"
+set "PYINSTALLER_CONFIG_DIR=%ROOT_DIR%.build-venv\pyinstaller-config"
+if not exist "%ROOT_DIR%build\icons" mkdir "%ROOT_DIR%build\icons"
+"%ROOT_DIR%.build-venv\Scripts\python.exe" "%ROOT_DIR%发票统计工具\build_icon.py" windows "%ROOT_DIR%img\invoiceIcon.svg" "%ROOT_DIR%build\icons\invoiceIcon.ico"
 if errorlevel 1 goto :build_failed
-".build-venv\Scripts\python.exe" -m PyInstaller ^
+if not exist "%ROOT_DIR%build\icons\invoiceIcon.ico" goto :build_failed
+"%ROOT_DIR%.build-venv\Scripts\python.exe" -m PyInstaller ^
     --noconfirm ^
     --clean ^
     --onefile ^
     --windowed ^
-    --icon "build\icons\invoiceIcon.ico" ^
-    --add-data "img\invoiceIcon.svg;img" ^
+    --icon "%ROOT_DIR%build\icons\invoiceIcon.ico" ^
+    --add-data "%ROOT_DIR%img\invoiceIcon.svg;img" ^
     --name "发票整理工具" ^
-    --distpath "bin\windows" ^
-    --workpath "build\pyinstaller-windows" ^
-    --specpath "build" ^
-    "发票统计工具\gui.py"
+    --distpath "%ROOT_DIR%bin\windows" ^
+    --workpath "%ROOT_DIR%build\pyinstaller-windows" ^
+    --specpath "%ROOT_DIR%build" ^
+    "%ROOT_DIR%发票统计工具\gui.py"
 if errorlevel 1 goto :build_failed
-if not exist "bin\windows\发票整理工具.exe" goto :build_failed
+if not exist "%ROOT_DIR%bin\windows\发票整理工具.exe" goto :build_failed
+copy /y "%ROOT_DIR%LICENSE" "%ROOT_DIR%bin\windows\LICENSE" >nul
+if errorlevel 1 goto :build_failed
 
 echo.
-echo 构建完成：%CD%\bin\windows\发票整理工具.exe
+echo 构建完成：%ROOT_DIR%bin\windows\发票整理工具.exe
 pause
 exit /b 0
 

@@ -344,7 +344,7 @@ class InvoiceWindow(QMainWindow):
         self.help_open = False
         self.busy = False
 
-        self.setWindowTitle("发票整理工具 v1.1.2")
+        self.setWindowTitle("发票整理工具 v1.1.3")
         self.setWindowIcon(application_icon())
         self.resize(1180, 720)
         self.tabs = QTabWidget()
@@ -855,8 +855,9 @@ class InvoiceWindow(QMainWindow):
               h2 { margin-top: 24px; color: #333; }
               code { background: #f2f2f2; padding: 2px 5px; }
             </style>
-            <h1>发票整理工具 v1.1.2</h1>
+            <h1>发票整理工具 v1.1.3</h1>
             <p>本工具用于从电子发票 PDF 中提取信息、写入 Excel 台账、合并发票、预览、导出和打印。</p>
+            <p>v1.1.3 增加了对部分高速通行费发票特殊字体映射的兼容处理。</p>
 
             <h2>基本操作</h2>
             <ol>
@@ -875,7 +876,7 @@ class InvoiceWindow(QMainWindow):
             </ul>
 
             <h2>版本与许可</h2>
-            <p><b>版本：</b>v1.1.2。</p>
+            <p><b>版本：</b>v1.1.3。</p>
             <p><b>许可协议：</b>MIT License（SPDX：MIT）。</p>
             <p><b>免费开源：</b>个人、教育、科研、企业内部和商业用途均可免费使用，不收取软件授权费用。</p>
             <p><b>允许事项：</b>可使用、复制、修改、合并、发布、分发、再授权和销售软件副本。</p>

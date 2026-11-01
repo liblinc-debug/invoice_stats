@@ -27,14 +27,20 @@ class Invoice:
 
 def extract_pdf_text(pdf_path: Path) -> str:
     reader = PdfReader(str(pdf_path))
-    text = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+    text = normalize_pdf_text("\n".join(page.extract_text() or "" for page in reader.pages)).strip()
     if not text:
         raise ValueError("PDF 没有可提取文字，可能是扫描件")
     return text
 
 
+def normalize_pdf_text(text: str) -> str:
+    return text.replace("\x00", "")
+
+
 def parse_date(text: str) -> date:
     match = re.search(r"(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日", text)
+    if not match:
+        match = re.search(r"(?<!\d)(20\d{2})[^\d\r\n]{1,6}(\d{1,2})[^\d\r\n]{1,6}(\d{1,2})(?!\d)", text)
     if not match:
         raise ValueError("未找到开票日期")
     return date(*(int(value) for value in match.groups()))
@@ -108,9 +114,13 @@ def parse_item_name(text: str) -> str:
         item = clean_item_name(" ".join(parts))
         if item and item not in items:
             items.append(item)
-    if not items:
-        raise ValueError("未找到项目名称")
-    return "；".join(items)
+    if items and not any(re.search(r"[\x00-\x1f\x7f-\x9f]", item) for item in items):
+        return "；".join(items)
+    if "通行日期起" in text and re.search(r"(?m)^[ \t]*通行费[ \t]*$", text):
+        return "通行费"
+    if items:
+        raise ValueError("项目名称文字编码异常")
+    raise ValueError("未找到项目名称")
 
 
 def parse_invoice(pdf_path: Path, category: str) -> Invoice:

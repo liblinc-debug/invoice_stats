@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import subprocess
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 import fitz
 from PyQt5.QtCore import QRectF, Qt
@@ -39,6 +42,7 @@ class PrintSettings:
     orientation: str = "portrait"
     margin_mm: float = 10.0
     grayscale: bool = True
+    duplex: bool = False
     center: bool = True
     auto_rotate: bool = False
 
@@ -160,6 +164,7 @@ def _set_printer_layout(printer: QPrinter, document: fitz.Document, settings: Pr
         QPrinter.Millimeter,
     )
     printer.setColorMode(QPrinter.GrayScale if settings.grayscale else QPrinter.Color)
+    printer.setDuplex(QPrinter.DuplexLongSide if settings.duplex else QPrinter.DuplexNone)
 
 
 def print_pdf_data(pdf_data: bytes, settings: PrintSettings, printer: QPrinter) -> int:
@@ -188,6 +193,52 @@ def print_pdf_data(pdf_data: bytes, settings: PrintSettings, printer: QPrinter) 
         return sheet_count
     finally:
         document.close()
+
+
+def print_pdf_via_cups(
+    pdf_data: bytes,
+    settings: PrintSettings,
+    resolution: int,
+    document_name: str,
+) -> int:
+    lp_path = Path("/usr/bin/lp")
+    if not lp_path.is_file():
+        raise RuntimeError("系统缺少 /usr/bin/lp，无法强制设置单双面打印")
+    if not settings.printer_name:
+        raise ValueError("未选择打印机")
+
+    with tempfile.NamedTemporaryFile(prefix="invoice-print-", suffix=".pdf", delete=False) as stream:
+        output_path = Path(stream.name)
+    try:
+        staging_printer = QPrinter(QPrinter.HighResolution)
+        staging_printer.setOutputFormat(QPrinter.PdfFormat)
+        staging_printer.setOutputFileName(str(output_path))
+        staging_printer.setResolution(resolution)
+        sheet_count = print_pdf_data(pdf_data, settings, staging_printer)
+        sides = "two-sided-long-edge" if settings.duplex else "one-sided"
+        completed = subprocess.run(
+            [
+                str(lp_path),
+                "-d",
+                settings.printer_name,
+                "-t",
+                document_name,
+                "-o",
+                f"sides={sides}",
+                "-o",
+                f"media={settings.paper_size}",
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode:
+            message = completed.stderr.strip() or completed.stdout.strip() or f"退出码 {completed.returncode}"
+            raise RuntimeError(f"打印队列拒绝任务：{message}")
+        return sheet_count
+    finally:
+        output_path.unlink(missing_ok=True)
 
 
 def render_sheet_preview(pdf_data: bytes, settings: PrintSettings) -> QPixmap:
@@ -305,9 +356,11 @@ class PrintSettingsDialog(QDialog):
                 self.printer_combo.setCurrentIndex(index)
         self.grayscale_check = QCheckBox("灰度打印")
         self.grayscale_check.setChecked(True)
+        self.duplex_check = QCheckBox("启用双面打印（长边翻页）")
         basic_form = QFormLayout()
         basic_form.addRow("打印机：", self.printer_combo)
         basic_form.addRow("颜色：", self.grayscale_check)
+        basic_form.addRow("双面：", self.duplex_check)
         basic_group = QGroupBox("基础设置")
         basic_group.setLayout(basic_form)
 
@@ -440,6 +493,7 @@ class PrintSettingsDialog(QDialog):
             orientation=self.orientation_combo.currentData(),
             margin_mm=self.margin_spin.value(),
             grayscale=self.grayscale_check.isChecked(),
+            duplex=self.duplex_check.isChecked(),
             center=self.center_check.isChecked(),
             auto_rotate=self.rotate_check.isChecked(),
         )

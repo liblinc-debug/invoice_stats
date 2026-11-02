@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import PyQt5
 import fitz
@@ -19,7 +19,15 @@ from PyQt5.QtPrintSupport import QPrinter
 from PyQt5.QtWidgets import QApplication, QToolBar
 
 from gui import HELP_TAB, InvoiceWindow, PDF_PREVIEW_TAB, application_icon
-from pdf_printing import PdfPreviewWidget, PrintSettings, PrintSettingsDialog, ordered_slots, print_pdf_data
+from pdf_printing import (
+    PdfPreviewWidget,
+    PrintSettings,
+    PrintSettingsDialog,
+    _set_printer_layout,
+    ordered_slots,
+    print_pdf_data,
+    print_pdf_via_cups,
+)
 from workbook_printing import workbook_to_pdf_data
 
 
@@ -44,6 +52,9 @@ class PdfPrintingTest(unittest.TestCase):
         self.assertEqual(preview.document.page_count, 3)
         dialog = PrintSettingsDialog(data)
         self.assertEqual([dialog.mode_tabs.tabText(i) for i in range(2)], ["页面大小", "一张多页"])
+        self.assertFalse(dialog.settings().duplex)
+        dialog.duplex_check.setChecked(True)
+        self.assertTrue(dialog.settings().duplex)
         dialog.mode_tabs.setCurrentIndex(1)
         self.assertEqual(dialog.settings().mode, "multiple")
 
@@ -54,9 +65,45 @@ class PdfPrintingTest(unittest.TestCase):
         window.merged_pdf_data = sample_pdf()
         window._show_pdf_preview()
         actions = [action.text() for action in window.findChild(QToolBar).actions()]
+        self.assertEqual(actions[0], "打开")
         self.assertEqual(actions[-3:], ["打印", "帮助", "退出"])
         self.assertEqual(window.tabs.tabText(window.tabs.currentIndex()), PDF_PREVIEW_TAB)
         self.assertTrue(window.print_action.isEnabled())
+
+    def test_open_pdf_for_preview_and_print(self):
+        window = InvoiceWindow(Path(tempfile.gettempdir()))
+        with tempfile.TemporaryDirectory() as directory:
+            pdf_path = Path(directory) / "待打印发票.pdf"
+            pdf_path.write_bytes(sample_pdf(2))
+            with patch("gui.QFileDialog.getOpenFileName", return_value=(str(pdf_path), "")):
+                window.open_pdf()
+            self.assertEqual(window._current_workspace_kind(), "pdf")
+            self.assertEqual(window.tabs.tabText(window.tabs.currentIndex()), pdf_path.name)
+            self.assertEqual(window.pdf_document_name, pdf_path.name)
+            self.assertTrue(window.print_action.isEnabled())
+            self.assertIn("共 2 页", window.statusBar().currentMessage())
+
+    def test_print_restores_previous_action_states(self):
+        window = InvoiceWindow(Path(tempfile.gettempdir()))
+        window.merged_pdf_data = sample_pdf()
+        window._show_pdf_preview()
+        actions = window.findChild(QToolBar).actions()
+        before = [action.isEnabled() for action in actions]
+        dialog = MagicMock()
+        dialog.Accepted = 1
+        dialog.exec_.return_value = 1
+        dialog.settings.return_value = PrintSettings(printer_name="测试打印机")
+        printer_info = MagicMock()
+        printer_info.supportedResolutions.return_value = [150]
+        with patch("gui.PrintSettingsDialog", return_value=dialog), patch(
+            "gui.QPrinterInfo.printerInfo", return_value=printer_info
+        ), patch("gui.print_pdf_via_cups", return_value=3), patch(
+            "gui.QMessageBox.information"
+        ):
+            window.start_print()
+        self.assertFalse(window.busy)
+        self.assertEqual([action.isEnabled() for action in actions], before)
+        self.assertTrue(window.tabs.isEnabled())
 
     def test_merge_stays_in_workspace_until_export(self):
         window = InvoiceWindow(Path(tempfile.gettempdir()))
@@ -125,6 +172,28 @@ class PdfPrintingTest(unittest.TestCase):
     def test_page_orders(self):
         self.assertEqual(ordered_slots(2, 2, "row"), [(0, 0), (0, 1), (1, 0), (1, 1)])
         self.assertEqual(ordered_slots(2, 2, "column"), [(0, 0), (1, 0), (0, 1), (1, 1)])
+
+    def test_duplex_setting_is_sent_explicitly(self):
+        document = fitz.open(stream=sample_pdf(), filetype="pdf")
+        try:
+            for enabled, expected in ((False, QPrinter.DuplexNone), (True, QPrinter.DuplexLongSide)):
+                printer = MagicMock()
+                _set_printer_layout(printer, document, PrintSettings(duplex=enabled))
+                printer.setDuplex.assert_called_once_with(expected)
+        finally:
+            document.close()
+
+    def test_cups_submission_overrides_queue_duplex_default(self):
+        completed = MagicMock(returncode=0, stdout="request id is test-1", stderr="")
+        for enabled, expected in ((False, "sides=one-sided"), (True, "sides=two-sided-long-edge")):
+            settings = PrintSettings(printer_name="Test_Printer", duplex=enabled)
+            with patch("pdf_printing.Path.is_file", return_value=True), patch(
+                "pdf_printing.subprocess.run", return_value=completed
+            ) as run:
+                self.assertEqual(print_pdf_via_cups(sample_pdf(), settings, 150, "测试文档"), 3)
+            command = run.call_args.args[0]
+            self.assertIn(expected, command)
+            self.assertIn("media=A4", command)
 
     def test_single_and_multiple_print_to_pdf(self):
         data = sample_pdf()

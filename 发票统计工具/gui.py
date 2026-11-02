@@ -174,7 +174,8 @@ def write_invoices_to_sheet(sheet, invoices: list[Invoice], header_row: int, col
     first_data_row = header_row + 1
     template_row = first_data_row
     previous_last_row = sheet.max_row
-    target_last_row = first_data_row + len(invoices) - 1
+    total_row = first_data_row + len(invoices)
+    target_last_row = total_row
     clear_last_row = max(previous_last_row, target_last_row)
 
     for row in range(first_data_row, clear_last_row + 1):
@@ -200,6 +201,11 @@ def write_invoices_to_sheet(sheet, invoices: list[Invoice], header_row: int, col
         )
         if len(invoice.item_name) > 24:
             sheet.row_dimensions[row].height = max(sheet.row_dimensions[row].height or 20, 32)
+
+    amount_column = columns["amount"]
+    sheet.cell(total_row, amount_column - 1, "合计")
+    total_cell = sheet.cell(total_row, amount_column, float(sum((invoice.amount for invoice in invoices), Decimal("0.00"))))
+    total_cell.number_format = "#,##0.00"
 
 
 def apply_invoice_results(workbook, result: dict[str, list[Invoice]]):
@@ -346,7 +352,7 @@ class InvoiceWindow(QMainWindow):
         self.help_open = False
         self.busy = False
 
-        self.setWindowTitle("发票整理工具 v1.1.3")
+        self.setWindowTitle("发票整理工具 v1.1.4")
         self.setWindowIcon(application_icon())
         self.resize(1180, 720)
         self.tabs = QTabWidget()
@@ -901,9 +907,9 @@ class InvoiceWindow(QMainWindow):
               h2 { margin-top: 24px; color: #333; }
               code { background: #f2f2f2; padding: 2px 5px; }
             </style>
-            <h1>发票整理工具 v1.1.3</h1>
+            <h1>发票整理工具 v1.1.4</h1>
             <p>本工具用于从电子发票 PDF 中提取信息、写入 Excel 台账、合并发票、预览、导出和打印。</p>
-            <p>v1.1.3 增加了对部分高速通行费发票特殊字体映射的兼容处理。</p>
+            <p>v1.1.4 在统计后的工作表末尾增加合计行，显示所有发票的总金额。</p>
 
             <h2>基本操作</h2>
             <ol>
@@ -925,7 +931,7 @@ class InvoiceWindow(QMainWindow):
             </ul>
 
             <h2>版本与许可</h2>
-            <p><b>版本：</b>v1.1.3。</p>
+            <p><b>版本：</b>v1.1.4。</p>
             <p><b>许可协议：</b>MIT License（SPDX：MIT）。</p>
             <p><b>免费开源：</b>个人、教育、科研、企业内部和商业用途均可免费使用，不收取软件授权费用。</p>
             <p><b>允许事项：</b>可使用、复制、修改、合并、发布、分发、再授权和销售软件副本。</p>

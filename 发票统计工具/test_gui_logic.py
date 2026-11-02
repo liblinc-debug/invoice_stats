@@ -90,6 +90,8 @@ class GuiLogicTest(unittest.TestCase):
         self.assertEqual(updated["材料费"]["B2"].value, "=1+1")
         self.assertEqual(updated["差旅费"]["C2"].value, "123")
         self.assertEqual(updated["差旅费"]["E2"].value, 88.5)
+        self.assertEqual(updated["差旅费"]["D3"].value, "合计")
+        self.assertEqual(updated["差旅费"]["E3"].value, 88.5)
 
     def test_statistics_message_includes_decimal_total(self):
         invoices = {
@@ -178,6 +180,9 @@ class GuiLogicTest(unittest.TestCase):
         self.assertEqual(sheet["C4"].value, 45.7)
         self.assertEqual(sheet["D4"].value, invoice.invoice_date)
         self.assertEqual(sheet["E4"].value, invoice.item_name)
+        self.assertEqual(sheet["B5"].value, "合计")
+        self.assertEqual(sheet["C5"].value, 45.7)
+        self.assertEqual(sheet["C5"].number_format, "#,##0.00")
 
 
 if __name__ == "__main__":
